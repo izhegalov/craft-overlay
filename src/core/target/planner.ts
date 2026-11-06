@@ -1151,6 +1151,14 @@ const SOURCE_NOTES: Partial<Record<ModSource, string>> = {
   desecrated: 'очернение',
 };
 
+/** Предупреждение о ненадёжном весе: шанс такого мода приблизителен. */
+function weightNote(target: TargetMod, pool: ModPool): string | undefined {
+  if (target.source !== 'normal') return undefined;
+  const rows = pool.mods.filter((mod) => matchesTarget(mod, target));
+  if (rows.some((mod) => mod.estimated)) return 'вес оценён по другому классу';
+  return rows.length > 0 && rows.every((mod) => mod.weight <= 1) ? 'вес неизвестен, шанс условный' : undefined;
+}
+
 /** Что мешает смоделировать мод. null — мод считается симуляцией. */
 function blocker(
   target: TargetMod,
@@ -1392,6 +1400,7 @@ export function analyzeTarget(
     active.push(index);
     const notes = [
       SOURCE_NOTES[entry.source],
+      weightNote(entry, pool),
       capped[index] ? 'значение выше данных, взят лучший тир' : undefined,
       entry.quality > 1 ? `значение с качеством ${Math.round((entry.quality - 1) * 100)}%` : undefined,
     ].filter(Boolean);

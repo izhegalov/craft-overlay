@@ -408,3 +408,38 @@ describe('какую базу купить', () => {
     expect(advice.options.find((option) => option.mods.length === 2)?.rarity).toBe('magic');
   }, 30000);
 });
+
+describe('неизвестные веса', () => {
+  const castSpeed = pool.mods.filter((mod) => mod.family === 'IncreasedCastSpeed');
+
+  it('вес 1 оценивается по такому же моду другого класса', () => {
+    expect(castSpeed.length).toBeGreaterThan(0);
+    for (const mod of castSpeed) {
+      expect(mod.estimated).toBe(true);
+      expect(mod.weight).toBeGreaterThan(1);
+    }
+    expect(pool.mods.find((mod) => mod.family === 'Strength')?.estimated).toBeUndefined();
+  });
+
+  it('неизвестный вес не используется как запасной источник', () => {
+    expect(pool.borrowed.every((mod) => mod.weight > 1)).toBe(true);
+  });
+
+  it('класс без единого известного веса остаётся равномерным', () => {
+    const diamond = buildPool(data, 'Diamond', ruToEn) as ModPool;
+    expect(diamond.mods.every((mod) => mod.weight === 1 && !mod.estimated)).toBe(true);
+  });
+
+  it('доспех с тремя защитами берёт веса у родственных классов', () => {
+    const armour = buildPool(data, 'Body_Armours_str_dex_int', ruToEn) as ModPool;
+    const estimated = armour.mods.filter((mod) => mod.estimated).length;
+    expect(estimated).toBeGreaterThan(armour.mods.length * 0.9);
+  });
+
+  it('мод с оценённым весом помечен в отчёте', () => {
+    const cast = '{ Суффикс "таланта" (Уровень: 3) }\n20(19-21)% повышение скорости сотворения чар';
+    const sample = ring('Редкий', 80, cast);
+    const report = analyzeTarget(ring('Обычный', 80, ''), sample, options);
+    expect(report.mods[0]?.note).toContain('вес оценён');
+  });
+});

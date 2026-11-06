@@ -25,6 +25,8 @@ export interface PoolMod {
   family: string;
   template: string;
   ranges: Array<[number, number]>;
+  /** Вес неизвестен и взят из такого же мода другого класса. */
+  estimated?: boolean;
 }
 
 export interface EssenceMod extends PoolMod {
@@ -152,6 +154,44 @@ function toPoolMod(row: Row): PoolMod {
   };
 }
 
+/** На poe2db вес 1 значит «неизвестен»: настоящие веса начинаются с 25. */
+const UNKNOWN_WEIGHT = 1;
+
+/** Классы доспехов отличаются только суффиксом защиты. */
+function classGroup(key: string): string {
+  return key.replace(/(_str|_dex|_int)+$/, '');
+}
+
+/**
+ * Оценивает неизвестный вес по такому же моду с известным весом: сначала того же
+ * вида предметов, затем любого. Класс, где неизвестны все веса (самоцветы), остаётся
+ * равномерным: чужие веса смешались бы с единицами и исказили бы шансы.
+ * shortcut: вес другого класса приблизителен, нужен источник настоящих весов.
+ */
+function estimateWeight(row: Row, key: string, data: ModsData, known: boolean): number | null {
+  const template = statTemplate(row.d);
+  const group = classGroup(key);
+  const candidates = data.classes
+    .filter((entry) => entry.key !== key && (known || classGroup(entry.key) === group))
+    .flatMap((entry) =>
+      entry.sections
+        .filter((section) => section.key === 'normal')
+        .flatMap((section) => section.groups.flatMap((part) => part.rows))
+        .filter((other) => other.w > UNKNOWN_WEIGHT && other.g === row.g && other.f === row.f)
+        .map((other) => ({
+          weight: other.w,
+          score:
+            (classGroup(entry.key) === group ? 0 : 10000) +
+            (statTemplate(other.d) === template ? 0 : 1000) +
+            Math.abs(other.lvl - row.lvl),
+        })),
+    );
+  return candidates.reduce<{ weight: number; score: number } | null>(
+    (best, entry) => (!best || entry.score < best.score ? entry : best),
+    null,
+  )?.weight ?? null;
+}
+
 function essencePriceId(name: string, ruToEn: Record<string, string>): string {
   return (ruToEn[name] ?? name).toLowerCase().replace(/[^\p{L}]+/gu, '-');
 }
@@ -180,10 +220,23 @@ export function buildPool(
         .filter((entry) => entry.key !== key)
         .flatMap((entry) => entry.sections.filter((section) => section.key === 'normal'))
         .flatMap((section) => section.groups.flatMap((group) => group.rows))
-        .filter((row) => row.w > 0 && (row.g === 'prefix' || row.g === 'suffix'))
+        .filter((row) => row.w > UNKNOWN_WEIGHT && (row.g === 'prefix' || row.g === 'suffix'))
         .map((row) => [[row.n, row.lvl, row.g, row.d].join('|'), toPoolMod(row)] as const),
     ).values(),
   ];
+
+  const normalRows = (source.sections.find((section) => section.key === 'normal')?.groups ?? [])
+    .flatMap((group) => group.rows)
+    .filter((row) => row.g === 'prefix' || row.g === 'suffix');
+  const known = normalRows.some((row) => row.w > UNKNOWN_WEIGHT);
+  const mods = normalRows
+    .filter((row) => row.w > 0)
+    .map((row) => {
+      const estimate = row.w === UNKNOWN_WEIGHT ? estimateWeight(row, key, data, known) : null;
+      return estimate === null
+        ? toPoolMod(row)
+        : { ...toPoolMod(row), weight: estimate, estimated: true };
+    });
 
   const toEssence = (mod: PoolMod, perfect: boolean): EssenceMod => ({
     ...mod,
@@ -193,7 +246,7 @@ export function buildPool(
 
   return {
     key,
-    mods: rows('normal').filter((mod) => mod.weight > 0),
+    mods,
     essences: [
       ...rows('essence').map((mod) => toEssence(mod, false)),
       ...rows('perfect_essence').map((mod) => toEssence(mod, true)),

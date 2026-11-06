@@ -556,7 +556,9 @@ function orbOdds(
   return `целевой мод ${percent(weight(wanted) / total)}, из верхних ${TOP_TIERS} тиров ${percent(weight(top) / total)}`;
 }
 
-export function analyzeCraft(item: ParsedItem, pool?: Pick<ModPool, 'mods'>): CraftAdvice {
+export function analyzeCraft(item: ParsedItem, modPool?: Pick<ModPool, 'mods'>): CraftAdvice {
+  // Без единого известного веса (самоцветы) проценты были бы выдумкой.
+  const pool = modPool?.mods.some((mod) => mod.weight > 1) ? modPool : undefined;
   if (item.rarity !== 'normal' && item.rarity !== 'magic' && item.rarity !== 'rare') {
     return unsupported(
       `Советник поддерживает белые, волшебные и редкие предметы (сейчас: ${item.rarity}).`,
