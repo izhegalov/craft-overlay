@@ -1,33 +1,22 @@
-import enRuMap from '../../data/reference/en-ru-map.json';
-import modsData from '../../data/reference/mods-data.json';
 import socketablesData from '../../data/socketables.json';
 import { parseItemText } from '../core/parser';
 import type { ParsedItem } from '../core/types';
-import { buildPool, poolKey, sameBase, type ModPool, type ModsData } from '../core/target/modpool';
+import { sameBase, type ModPool } from '../core/target/modpool';
 import {
   CURRENCY_LABELS,
   analyzeTarget,
   readTargetMods,
+  suggestBases,
+  type BaseAdvice,
   type TargetCheck,
 } from '../core/target/planner';
+import { poolFor } from '../core/target/pools';
 import { NINJA_TYPES, parseNinjaOverview } from '../core/target/prices';
 import type { SocketablesData } from '../core/target/sockets';
 import type { Settings } from './store';
 
 const PRICE_MAX_AGE_MS = 60 * 60 * 1000;
 const PRICE_TIMEOUT_MS = 10000;
-
-const ruToEn = Object.fromEntries(
-  Object.entries(enRuMap as Record<string, string>).map(([en, ru]) => [ru, en]),
-);
-const pools = new Map<string, ModPool | null>();
-
-function poolFor(item: ParsedItem): ModPool | null {
-  const key = poolKey(item);
-  if (!key) return null;
-  if (!pools.has(key)) pools.set(key, buildPool(modsData as ModsData, key, ruToEn));
-  return pools.get(key) ?? null;
-}
 
 export interface TargetSummary {
   id: string;
@@ -101,6 +90,18 @@ export function checkItem(text: string, settings: Settings): TargetCheck {
   return reports.length > 0
     ? { reports, divinePrice }
     : { error: 'Для этой базы нет целевых предметов. Добавь образец в настройках.', reports, divinePrice };
+}
+
+export function baseAdvice(id: string, settings: Settings): BaseAdvice | null {
+  const saved = settings.targets.find((entry) => entry.id === id);
+  const target = saved ? readTarget(saved.text) : null;
+  if (!target || 'error' in target) return null;
+  return suggestBases(target.item, {
+    pool: target.pool,
+    tolerance: settings.tolerancePct / 100,
+    prices: effectivePrices(settings),
+    ...(saved?.basePrice !== undefined ? { basePrice: saved.basePrice } : {}),
+  });
 }
 
 export function pricesAreStale(settings: Settings): boolean {

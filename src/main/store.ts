@@ -48,6 +48,10 @@ function sanitizePlan(value: unknown): ActivePlan | null {
       title: step.title,
       ...(typeof step.detail === 'string' ? { detail: step.detail } : {}),
       ...(step.repeat === true ? { repeat: true } : {}),
+      ...(typeof step.chance === 'number' && step.chance >= 0 && step.chance <= 1
+        ? { chance: step.chance }
+        : {}),
+      ...(typeof step.chanceOf === 'string' ? { chanceOf: step.chanceOf } : {}),
       state: step.state === 'done' || step.state === 'failed' ? step.state : 'todo',
       attempts: Number.isInteger(step.attempts) && step.attempts > 0 ? step.attempts : 0,
     })),

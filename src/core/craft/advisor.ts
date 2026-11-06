@@ -1,3 +1,5 @@
+import type { ModPool, Side } from '../target/modpool';
+import { statTemplate } from '../target/modpool';
 import type { ModifierGroup, ParsedItem } from '../types';
 
 /**
@@ -521,7 +523,40 @@ function makeSummary(baseLabel: string, itemLevel: number | undefined, action: s
   return `${baseLabel}${level}. ${action}`;
 }
 
-export function analyzeCraft(item: ParsedItem): CraftAdvice {
+const TOP_TIERS = 2;
+
+function percent(share: number): string {
+  return `${(share * 100).toFixed(share < 0.01 ? 2 : 1)}%`;
+}
+
+/** Шанс целевого мода с одной сферы по весам пула; пусто, если выпасть нечему. */
+function orbOdds(
+  pool: Pick<ModPool, 'mods'>,
+  item: ParsedItem,
+  profile: AdviceProfile,
+  groups: ModifierGroup[],
+  sides: Side[],
+): string {
+  const rows = pool.mods.filter((mod) => mod.level <= (item.itemLevel ?? 100));
+  const present = new Set(groups.flatMap((group) => group.lines.map((line) => statTemplate(line.text))));
+  const taken = new Set(rows.filter((mod) => present.has(mod.template)).map((mod) => mod.family));
+  const open = rows.filter((mod) => sides.includes(mod.kind) && !taken.has(mod.family));
+
+  const wanted = open.filter((mod) =>
+    (mod.kind === 'prefix' ? profile.targetPrefixFamilies : profile.targetSuffixFamilies).includes(
+      familyOf(mod.text),
+    ),
+  );
+  const top = wanted.filter(
+    (mod) => wanted.filter((other) => other.family === mod.family && other.level > mod.level).length < TOP_TIERS,
+  );
+  const weight = (mods: typeof rows): number => mods.reduce((sum, mod) => sum + mod.weight, 0);
+  const total = weight(open);
+  if (total <= 0) return '';
+  return `целевой мод ${percent(weight(wanted) / total)}, из верхних ${TOP_TIERS} тиров ${percent(weight(top) / total)}`;
+}
+
+export function analyzeCraft(item: ParsedItem, pool?: Pick<ModPool, 'mods'>): CraftAdvice {
   if (item.rarity !== 'normal' && item.rarity !== 'magic' && item.rarity !== 'rare') {
     return unsupported(
       `Советник поддерживает белые, волшебные и редкие предметы (сейчас: ${item.rarity}).`,
@@ -585,6 +620,20 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
   let summary = '';
   let steps: string[] = [];
 
+  const phrase = (sides: Side[]): string => (pool ? orbOdds(pool, item, profile, groups, sides) : '');
+  const odds = (sides: Side[]): string => {
+    const text = phrase(sides);
+    return text ? ` Шанс: ${text}.` : '';
+  };
+  const sideOdds = (label: string, side: Side): string => {
+    const text = phrase([side]);
+    return text ? ` ${label}: ${text}.` : '';
+  };
+  const openSides: Side[] = [
+    ...(openPrefixes > 0 ? (['prefix'] as const) : []),
+    ...(openSuffixes > 0 ? (['suffix'] as const) : []),
+  ];
+
   if (profile.mode === 'waystone' || profile.mode === 'tablet') {
     summary = `${profile.label}${levelText}. Оценка по модам для маппинга.`;
     steps = [
@@ -599,9 +648,9 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
       'Цель — получить 2 целевых мода и решить, делать ли редким.',
     );
     steps = [
-      '1. Сфера превращения (Orb of Transmutation) — сделать волшебным, получить 1 мод.',
-      '2. Сфера усиления (Orb of Augmentation) — добавить 2-й мод.',
-      '3. Если оба мода из целевого списка → Сфера царей (Regal Orb). Если один или мусор → Сфера алхимии (Alchemy) / новый base.',
+      `Сфера превращения (Orb of Transmutation) — сделать волшебным, получить 1 мод.${odds(['prefix', 'suffix'])}`,
+      `Сфера усиления (Orb of Augmentation) — добавить 2-й мод на свободную сторону.${sideOdds('После префикса', 'suffix')}${sideOdds('После суффикса', 'prefix')}`,
+      `Если оба мода из целевого списка → Сфера царей (Regal Orb).${odds(['prefix', 'suffix'])} Если один или мусор → Сфера алхимии (Alchemy) / новый base.`,
     ];
   } else if (item.rarity === 'magic') {
     if (counts.prefixes + counts.suffixes === 0) {
@@ -614,7 +663,7 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
       if (counts.good > 0) {
         summary = makeSummary(`Один хороший мод. ${baseLabel}`, item.itemLevel, '');
         steps = [
-          'Сфера усиления (Orb of Augmentation) — добавить второй мод.',
+          `Сфера усиления (Orb of Augmentation) — добавить второй мод.${odds(openSides)}`,
           'Если второй мод тоже целевой → Сфера царей (Regal Orb).',
           'Если второй мод мусорный → Сфера алхимии (Alchemy) / новый base.',
         ];
@@ -628,7 +677,7 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
     } else if (counts.good >= 2) {
       summary = makeSummary(`Оба мода целевые. ${baseLabel}`, item.itemLevel, '');
       steps = [
-        'Сфера царей (Regal Orb) — сделать предмет редким, сохранив оба мода.',
+        `Сфера царей (Regal Orb) — сделать предмет редким, сохранив оба мода.${odds(['prefix', 'suffix'])}`,
         'Дальше смотри совет для редкого предмета.',
       ];
     } else if (counts.good === 1) {
@@ -659,7 +708,7 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
         '',
       );
       steps = [
-        `Сфера возвышения (Exalted Orb) в открытый ${openPrefixes > 0 ? 'префикс' : 'суффикс'} — попытка усилить предмет.`,
+        `Сфера возвышения (Exalted Orb) в открытые слоты — попытка усилить предмет.${odds(openSides)}`,
         'Если попадёт мусор — остановиться, не рероллить хорошие моды.',
       ];
     } else if (counts.good >= 2) {
@@ -678,7 +727,7 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
       summary = makeSummary(`Один целевой мод. ${baseLabel}`, item.itemLevel, '');
       steps = [
         openSlots > 0
-          ? 'Можно попробовать Сферу возвышения (Exalted Orb) в открытый слот, но рискованно.'
+          ? `Можно попробовать Сферу возвышения (Exalted Orb) в открытый слот, но рискованно.${odds(openSides)}`
           : 'Свободных слотов нет — докрафт невозможен без Сферы отмены (Annul) / Сферы хаоса.',
         'Если не готов рисковать — оставь как есть / новый base.',
       ];
@@ -691,7 +740,11 @@ export function analyzeCraft(item: ParsedItem): CraftAdvice {
     }
   }
 
-  steps.push('Оценка без цен: ориентир — целевые моды, тиры и открытые слоты.');
+  steps.push(
+    pool
+      ? 'Шансы — по весам модов для этого уровня предмета, без оменов. Для своего образца нажми Alt+G.'
+      : 'Оценка без цен: ориентир — целевые моды, тиры и открытые слоты.',
+  );
 
   return {
     supported: true,

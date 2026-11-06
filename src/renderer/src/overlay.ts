@@ -10,6 +10,7 @@
 import { parseItemText } from '../../core/parser';
 import { analyzeCraft } from '../../core/craft/advisor';
 import type { CraftAdvice } from '../../core/craft/advisor';
+import { poolFor } from '../../core/target/pools';
 import type { ActivePlan, StrategyResult, TargetCheck, TargetReport } from '../../core/target/planner';
 import type { ModifierGroup, ModValue, ParsedItem, StatLine } from '../../core/types';
 
@@ -276,7 +277,7 @@ function renderItem(item: ParsedItem): void {
     item.category === 'tablet' ||
     item.category === 'trap' ||
     item.category === 'relic'
-      ? analyzeCraft(item)
+      ? analyzeCraft(item, poolFor(item) ?? undefined)
       : null;
 
   const grantedSkills =
@@ -437,9 +438,20 @@ function formatCount(value: number): string {
   return value < 10 ? value.toFixed(1) : String(Math.round(value));
 }
 
+function formatShare(share: number): string {
+  return `${(share * 100).toFixed(share < 0.01 ? 2 : 1)}%`;
+}
+
 function formatChance(strategy: StrategyResult): string {
   if (strategy.probability === 0) return `< ${(100 / strategy.trials).toFixed(2)}%`;
-  return `${(strategy.probability * 100).toFixed(strategy.probability < 0.01 ? 2 : 1)}%`;
+  return formatShare(strategy.probability);
+}
+
+function stepOdds(strategy: StrategyResult): string {
+  return strategy.steps
+    .filter((step) => step.chance !== undefined)
+    .map((step) => `${step.title}: ${formatShare(step.chance ?? 0)}`)
+    .join(' → ');
 }
 
 function strategyRow(strategy: StrategyResult, path: string, divinePrice: number | null): string {
@@ -461,6 +473,7 @@ function strategyRow(strategy: StrategyResult, path: string, divinePrice: number
         <span class="ov-strategy-value">${escapeHtml(formatChance(strategy))} · ${escapeHtml(cost)}</span>
       </div>
       <div class="ov-strategy-uses">${escapeHtml(uses)}</div>
+      ${stepOdds(strategy) ? `<div class="ov-strategy-uses">Шанс сферы: ${escapeHtml(stepOdds(strategy))}</div>` : ''}
       ${bases ? `<div class="ov-strategy-risk">${escapeHtml(bases)}</div>` : ''}
       <div class="ov-strategy-foot">
         ${strategy.tag ? `<span class="ov-strategy-tag">${escapeHtml(strategy.tag)}</span>` : '<span></span>'}
@@ -549,6 +562,7 @@ function stepRow(step: ActivePlan['steps'][number], index: number): string {
   return `
     <li class="ov-plan-step ${escapeHtml(step.state)}">
       <div class="ov-plan-title">${index + 1}. ${escapeHtml(step.title)} ${attempts}</div>
+      ${step.chance !== undefined ? `<div class="ov-plan-chance">Шанс за применение: ${formatShare(step.chance)} (${escapeHtml(step.chanceOf ?? '')})</div>` : ''}
       ${step.detail ? `<div class="ov-plan-detail">${escapeHtml(step.detail)}</div>` : ''}
       ${hint}
       <div class="ov-plan-actions">${actions}</div>

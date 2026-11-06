@@ -66,12 +66,16 @@ describe('план крафта', () => {
       targetName: 'Кольцо',
       label: 'Путь',
       steps: [
-        { title: 'Шаг', detail: 'x', repeat: true, state: 'done', attempts: 2 },
+        { title: 'Шаг', detail: 'x', repeat: true, chance: 0.5, chanceOf: 'нужный мод', state: 'done', attempts: 2 },
+        { title: 'Шаг 2', chance: 5 },
         { title: 5 },
       ],
     };
     const clean = sanitizeSettings({ activePlan: plan }).activePlan;
-    expect(clean?.steps).toEqual([{ title: 'Шаг', detail: 'x', repeat: true, state: 'done', attempts: 2 }]);
+    expect(clean?.steps).toEqual([
+      { title: 'Шаг', detail: 'x', repeat: true, chance: 0.5, chanceOf: 'нужный мод', state: 'done', attempts: 2 },
+      { title: 'Шаг 2', state: 'todo', attempts: 0 },
+    ]);
     expect(sanitizeSettings({ activePlan: { label: 1 } }).activePlan).toBeNull();
   });
 });

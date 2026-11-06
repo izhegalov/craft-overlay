@@ -1,4 +1,4 @@
-import type { ActivePlan, TargetCheck } from '../../core/target/planner';
+import type { ActivePlan, BaseAdvice, TargetCheck } from '../../core/target/planner';
 
 export interface SettingsView {
   tolerancePct: number;
@@ -21,6 +21,7 @@ declare global {
       addTarget(text: string): Promise<SettingsView | { error: string }>;
       removeTarget(id: string): Promise<SettingsView>;
       setBasePrice(id: string, price: number | null): Promise<SettingsView>;
+      getBases(id: string): Promise<BaseAdvice | null>;
       refreshPrices(): Promise<{ error?: string; view: SettingsView }>;
       getPlan(): Promise<ActivePlan | null>;
       savePlan(plan: ActivePlan | null): Promise<void>;

@@ -1,5 +1,6 @@
 import { parseItemText } from '../../core/parser';
 import { analyzeCraft } from '../../core/craft/advisor';
+import { poolFor } from '../../core/target/pools';
 import { initSettings } from './settings';
 import type { CraftAdvice } from '../../core/craft/advisor';
 import type { ModifierGroup, ModValue, ParsedItem, StatLine } from '../../core/types';
@@ -212,7 +213,7 @@ function renderItem(item: ParsedItem, jsonText: string): string {
     item.category === 'tablet' ||
     item.category === 'trap' ||
     item.category === 'relic'
-      ? analyzeCraft(item)
+      ? analyzeCraft(item, poolFor(item) ?? undefined)
       : null;
 
   const modifiers = item.modifiers.length > 0

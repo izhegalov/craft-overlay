@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('craft', {
   removeTarget: (id: string): Promise<unknown> => ipcRenderer.invoke('target:remove', id),
   setBasePrice: (id: string, price: number | null): Promise<unknown> =>
     ipcRenderer.invoke('target:base-price', id, price),
+  getBases: (id: string): Promise<unknown> => ipcRenderer.invoke('target:bases', id),
   refreshPrices: (): Promise<unknown> => ipcRenderer.invoke('prices:refresh'),
   getPlan: (): Promise<unknown> => ipcRenderer.invoke('plan:get'),
   savePlan: (plan: unknown): Promise<void> => ipcRenderer.invoke('plan:save', plan),

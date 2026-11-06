@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { parseItemText } from '../src/core/parser';
 import type { ParsedItem } from '../src/core/types';
-import { buildPool, poolKey, statTemplate, type ModPool, type ModsData } from '../src/core/target/modpool';
-import { analyzeTarget, readTargetMods } from '../src/core/target/planner';
+import { buildPool, poolKey, sameBase, statTemplate, type ModPool, type ModsData } from '../src/core/target/modpool';
+import { analyzeCraft } from '../src/core/craft/advisor';
+import { analyzeTarget, readTargetMods, suggestBases } from '../src/core/target/planner';
 import { parseNinjaOverview } from '../src/core/target/prices';
 
 const data = JSON.parse(
@@ -342,4 +343,68 @@ describe('parseNinjaOverview', () => {
   it('отвергает незнакомый формат', () => {
     expect(() => parseNinjaOverview({})).toThrow();
   });
+});
+
+describe('база предмета', () => {
+  it('приставка качества у белого предмета не мешает сравнению', () => {
+    const text = readFileSync(new URL('../fixtures/ru/normal-body-armour-advanced.txt', import.meta.url), 'utf8');
+    expect(sameBase(parse(text), 'Дублёный плащ')).toBe(true);
+    expect(sameBase(parse(text), 'Другой плащ')).toBe(false);
+  });
+});
+
+describe('шансы шагов', () => {
+  const sample = ring('Редкий', 80, [LIFE, FIRE, COLD].join('\n\n'));
+  const white = ring('Обычный', 80, '');
+
+  it('шанс Сферы превращения равен доле весов нужных модов', () => {
+    const report = analyzeTarget(white, sample, { ...options, tolerance: 0 });
+    const step = report.strategies
+      .flatMap((strategy) => strategy.steps)
+      .find((entry) => entry.title === 'Сфера превращения');
+    const rows = readTargetMods(sample, pool, 0);
+    const open = pool.mods.filter((mod) => mod.level <= 80);
+    const total = open.reduce((sum, mod) => sum + mod.weight, 0);
+    const wanted = open.reduce((sum, mod) => {
+      const row = rows.find((entry) => entry.template === mod.template && entry.family === mod.family);
+      const [low = 0, high = 0] = mod.ranges[0] ?? [];
+      const minimum = row?.minimums[0] ?? 0;
+      if (!row || minimum > high) return sum;
+      return sum + mod.weight * (minimum <= low ? 1 : (high - minimum) / (high - low));
+    }, 0);
+    expect(step?.chance).toBeCloseTo(wanted / total, 6);
+    expect(step?.chanceOf).toBe('нужный мод');
+  });
+
+  it('совет Alt+F считает шанс по весам пула', () => {
+    const steps = analyzeCraft(white, pool).steps;
+    expect(steps[0]).toMatch(/целевой мод \d+\.\d+%, из верхних 2 тиров \d/);
+    expect(steps[1]).toContain('После префикса');
+    expect(analyzeCraft(white).steps.join(' ')).not.toContain('целевой мод');
+  });
+});
+
+describe('какую базу купить', () => {
+  const { allPaths: _all, ...rest } = options;
+  const allPriced = new Proxy<Record<string, number>>({}, { get: () => 5 });
+  const quick = { ...rest, prices: allPriced, trials: 30, basePrice: 1 };
+  const STORM = ['{ Суффикс "Бури" (Уровень: 2) — Молния }', '+40(36-45)% к сопротивлению молнии'].join(String.fromCharCode(10));
+  const mods = (...list: string[]): string => list.join(String.fromCharCode(10, 10));
+
+  it('покупка с готовым модом окупается и имеет предел цены', () => {
+    const advice = suggestBases(ring('Редкий', 80, mods(LIFE, FIRE, COLD)), quick);
+    expect(advice.white?.probability).toBeGreaterThan(0);
+    expect(advice.itemLevel).toBeGreaterThan(1);
+    expect(advice.options.length).toBeGreaterThan(0);
+    for (const option of advice.options) {
+      expect(option.maxPrice).toBeGreaterThan(0);
+      expect(option.mods.length).toBeLessThan(3);
+    }
+  }, 30000);
+
+  it('два суффикса не помещаются на волшебный предмет', () => {
+    const advice = suggestBases(ring('Редкий', 80, mods(LIFE, FIRE, COLD, STORM)), quick);
+    expect(advice.options.find((option) => option.mods.length === 3)?.rarity).toBe('rare');
+    expect(advice.options.find((option) => option.mods.length === 2)?.rarity).toBe('magic');
+  }, 30000);
 });

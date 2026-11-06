@@ -4,9 +4,9 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Worker } from 'node:worker_threads';
-import type { TargetCheck } from '../core/target/planner';
 import { loadSettings, sanitizeSettings, saveSettings, type Settings } from './store';
 import {
+  baseAdvice,
   checkItem,
   fetchPrices,
   priceRows,
@@ -267,18 +267,18 @@ async function refreshPrices(): Promise<string | undefined> {
   }
 }
 
-function runCheck(text: string): Promise<TargetCheck> {
-  return new Promise<TargetCheck>((resolve, reject) => {
+function runInWorker<T>(message: object, fallback: () => T): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     const worker = new Worker(join(__dirname, 'target-worker.cjs'));
-    worker.once('message', (check: TargetCheck) => {
-      resolve(check);
+    worker.once('message', (result: T) => {
+      resolve(result);
       void worker.terminate();
     });
     worker.once('error', reject);
-    worker.postMessage({ text, settings });
+    worker.postMessage({ ...message, settings });
   }).catch((error: unknown) => {
     console.error('Поток расчёта не запустился, считаем в основном:', error);
-    return checkItem(text, settings);
+    return fallback();
   });
 }
 
@@ -292,7 +292,7 @@ async function showTargetCheck(text: string | null): Promise<void> {
   if (settings.prices?.league !== settings.league) pricesNote = await refreshPrices();
   else if (pricesAreStale(settings)) void refreshPrices();
   await showOverlay('target:result', { reports: [], divinePrice: null, pending: true });
-  const check = await runCheck(text);
+  const check = await runInWorker({ text }, () => checkItem(text, settings));
   await showOverlay('target:result', { ...check, ...(pricesNote ? { pricesNote } : {}) });
 }
 
@@ -358,6 +358,10 @@ app.whenReady().then(() => {
     });
     updateSettings(sanitizeSettings({ ...settings, targets }));
     return settingsView();
+  });
+  ipcMain.handle('target:bases', (_event, id: unknown) => {
+    if (typeof id !== 'string') return null;
+    return runInWorker({ baseId: id }, () => baseAdvice(id, settings));
   });
   ipcMain.handle('plan:get', () => settings.activePlan);
   ipcMain.handle('plan:save', (_event, plan: unknown) => {

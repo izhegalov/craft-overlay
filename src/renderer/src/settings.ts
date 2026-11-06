@@ -1,3 +1,4 @@
+import type { BaseAdvice } from '../../core/target/planner';
 import type { SettingsView } from './env';
 
 function required<T extends Element>(selector: string): T {
@@ -19,8 +20,50 @@ export function initSettings(): void {
   const pricesStatus = required<HTMLElement>('#prices-status');
 
   let manualPrices: Record<string, number> = {};
+  // Расчёт идёт секунды, поэтому повторяется только при смене его входных данных.
+  const bases = new Map<string, Promise<BaseAdvice | null>>();
+
+  function baseLines(advice: BaseAdvice | null, divine: number | null): string[] {
+    if (!advice) return ['Не удалось посчитать базу.'];
+    const money = (value: number): string =>
+      divine && value >= divine
+        ? `${(value / divine).toFixed(1)} div`
+        : `${value < 10 ? value.toFixed(1) : Math.round(value)} ex`;
+    const chance = (value: number): string => `${(value * 100).toFixed(value < 0.01 ? 2 : 1)}%`;
+    const from = (incomplete: boolean): string => (incomplete ? 'от ' : '');
+    return [
+      `Уровень предмета от ${advice.itemLevel}.`,
+      ...(advice.mustHave.length > 0
+        ? [`Не крафтится, искать на базе: ${advice.mustHave.join('; ')}`]
+        : []),
+      advice.white
+        ? `Белая база: ${chance(advice.white.probability)}, ${from(advice.white.incompleteCost)}${money(advice.white.cost)} на успех — ${advice.white.label}.`
+        : 'С белой базы симуляция не собрала образец.',
+      ...advice.options.map((option) => {
+        const worth = option.maxPrice === null ? '' : `, брать дешевле ${money(option.maxPrice)}`;
+        const rarity = option.rarity === 'magic' ? 'Волшебная' : 'Редкая';
+        return `${rarity} с «${option.mods.join('» и «')}»: ${chance(option.probability)}, ${from(option.incompleteCost)}${money(option.cost)} на успех${worth} — ${option.label}.`;
+      }),
+    ];
+  }
+
+  function renderBases(box: HTMLElement, id: string, key: string, divine: number | null): void {
+    box.textContent = 'Считаю, какую базу купить…';
+    const advice = bases.get(key) ?? window.craft.getBases(id);
+    bases.set(key, advice);
+    void advice.then((result) => {
+      box.replaceChildren(
+        ...baseLines(result, divine).map((line) => {
+          const row = document.createElement('div');
+          row.textContent = line;
+          return row;
+        }),
+      );
+    });
+  }
 
   function renderTargets(view: SettingsView): void {
+    const divine = view.priceRows.find((row) => row.id === 'divine');
     targetList.replaceChildren(
       ...view.targets.map((target) => {
         const row = document.createElement('li');
@@ -30,7 +73,15 @@ export function initSettings(): void {
         const mods = document.createElement('div');
         mods.className = 'target-mods';
         mods.textContent = target.mods.join('; ');
-        text.append(title, mods);
+        const advice = document.createElement('div');
+        advice.className = 'target-bases';
+        text.append(title, mods, advice);
+        renderBases(
+          advice,
+          target.id,
+          JSON.stringify([target.id, target.basePrice, view.tolerancePct, view.pricesFetchedAt, view.priceRows]),
+          divine?.manual ?? divine?.price ?? null,
+        );
 
         const remove = document.createElement('button');
         remove.className = 'btn small';

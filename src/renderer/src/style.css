@@ -873,3 +873,8 @@ textarea {
 .target-price input {
   width: 80px;
 }
+
+.target-bases {
+  margin-top: 6px;
+  font-size: 12px;
+}

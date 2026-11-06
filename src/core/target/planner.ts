@@ -73,6 +73,37 @@ export interface PlanStep {
   detail?: string;
   /** Шаг повторяется, пока не выйдет. */
   repeat?: boolean;
+  /** Средний шанс одного применения по весам модов, в ходе симуляции пути. */
+  chance?: number;
+  /** На что этот шанс. */
+  chanceOf?: string;
+}
+
+/** Шаг до расчёта: stage связывает его с применениями в симуляции. */
+type StepDraft = PlanStep & { stage?: string };
+
+/** Какой предмет выгодно купить вместо белой базы. */
+export interface BaseOption {
+  mods: string[];
+  rarity: 'magic' | 'rare';
+  label: string;
+  probability: number;
+  /** Расход на успех без цены самой покупки. */
+  cost: number;
+  /** Дороже этой цены покупка не окупается; null, если сравнить не с чем. */
+  maxPrice: number | null;
+  incompleteCost: boolean;
+}
+
+export interface BaseAdvice {
+  baseType: string;
+  /** Минимальный уровень предмета для нужных тиров. */
+  itemLevel: number;
+  /** Моды, которые нельзя скрафтить: нужны уже на купленной базе. */
+  mustHave: string[];
+  /** Лучший путь с белой базы; null, если симуляция его не нашла. */
+  white: { label: string; probability: number; cost: number; incompleteCost: boolean } | null;
+  options: BaseOption[];
 }
 
 export type TargetVerdict = 'ready' | 'reachable' | 'partial' | 'unreachable';
@@ -208,6 +239,16 @@ const LOOP_STEPS = 300;
 const LOOP_TRIALS = 120;
 const ONE_PASS_TRIALS = 3000;
 const REVEAL_OPTIONS = 3;
+
+/** Накопленный шанс применений по этапам: сумма точных шансов, а не выпавших исходов. */
+type StageOdds = Map<string, { casts: number; sum: number }>;
+
+const CHANCE_OF: Record<string, string> = {
+  alch: 'нужный мод, на каждый из 4',
+  annul: 'снять лишний мод',
+  divine: 'все значения в разбросе',
+  fracture: 'закрепить нужный мод',
+};
 
 export const CURRENCY_LABELS: Record<string, string> = {
   transmute: 'Сфера превращения',
@@ -580,12 +621,22 @@ function runAttempt(
   strategy: Strategy,
   random: () => number,
   uses: Map<string, number>,
+  odds: StageOdds,
 ): boolean {
   const slots = start.slots.map((slot) => ({ ...slot }));
   let rarity = start.rarity;
 
   const spend = (id: string): void => {
     uses.set(id, (uses.get(id) ?? 0) + 1);
+  };
+  const note = (stage: string, chance: number): void => {
+    const entry = odds.get(stage);
+    if (entry) {
+      entry.casts += 1;
+      entry.sum += chance;
+    } else {
+      odds.set(stage, { casts: 1, sum: chance });
+    }
   };
   const open = (side: Side): number =>
     capacity(rarity) - slots.filter((slot) => slot.kind === side).length;
@@ -599,7 +650,7 @@ function runAttempt(
     minLevel: ORB_MIN_LEVEL[kind][tier],
   });
 
-  const addRandom = (side?: Side, minLevel = 0): boolean => {
+  const addRandom = (side: Side | undefined, minLevel: number, stage: string): boolean => {
     // Самый горячий участок симуляции: без выделения памяти на каждый выбор.
     const free = (kind: Side): boolean => open(kind) > plan.reserved[kind];
     const prefixOpen = side ? side === 'prefix' : free('prefix');
@@ -610,8 +661,16 @@ function runAttempt(
       !slots.some((slot) => slot.family === row.mod.family);
 
     let total = 0;
-    for (const row of plan.rows) if (allowed(row)) total += row.mod.weight;
+    let wanted = 0;
+    for (const row of plan.rows) {
+      if (!allowed(row)) continue;
+      total += row.mod.weight;
+      if (row.target >= 0 && !slots.some((slot) => slot.target === row.target)) {
+        wanted += row.mod.weight * row.chance;
+      }
+    }
     if (total <= 0) return false;
+    note(stage, wanted / total);
 
     let roll = random() * total;
     let picked: PlannedRow | undefined;
@@ -638,8 +697,11 @@ function runAttempt(
     return true;
   };
 
-  const removeRandom = (side?: Side, lowest = false): boolean => {
+  const removeRandom = (side?: Side, lowest = false, stage?: string): boolean => {
     const candidates = slots.filter((slot) => !slot.locked && (!side || slot.kind === side));
+    if (stage && candidates.length > 0) {
+      note(stage, candidates.filter((slot) => slot.target < 0).length / candidates.length);
+    }
     const picked = lowest
       ? candidates.reduce<Slot | undefined>(
           (low, slot) => (!low || slot.level < low.level ? slot : low),
@@ -653,6 +715,7 @@ function runAttempt(
 
   const addEssence = (target: number, essence: EssenceMod, chance: number): void => {
     spend(essence.priceId);
+    note('essence', chance);
     const hit = random() < chance;
     slots.push({
       kind: essence.kind,
@@ -683,6 +746,7 @@ function runAttempt(
     if (option.omen) spend(option.omen);
     if (open(entry.kind) <= 0 && !removeRandom(entry.kind)) return false;
 
+    note('desecrate', option.reveal * option.chance);
     const found = random() < option.reveal;
     const hit = found && random() < option.chance;
     slots.push({
@@ -704,9 +768,9 @@ function runAttempt(
     const side = plan.targets[missing()[0] ?? -1]?.kind;
     if (side && strategy.sideOmen) {
       spend(SIDE_OMEN.alchemy[side]);
-      for (let index = 0; index < 3; index += 1) addRandom(side);
+      for (let index = 0; index < 3; index += 1) addRandom(side, 0, 'alch');
     }
-    while (slots.length < 4 && addRandom());
+    while (slots.length < 4 && addRandom(undefined, 0, 'alch'));
   }
 
   const maxSteps = strategy.remove || strategy.divine ? LOOP_STEPS : ONE_PASS_STEPS;
@@ -718,7 +782,7 @@ function runAttempt(
       const { id, minLevel } = orb('transmute');
       spend(id);
       rarity = 'magic';
-      addRandom(undefined, minLevel);
+      addRandom(undefined, minLevel, 'transmute');
       continue;
     }
 
@@ -733,7 +797,7 @@ function runAttempt(
       if (slots.length < 2 && !option) {
         const { id, minLevel } = orb('aug');
         spend(id);
-        addRandom(undefined, minLevel);
+        addRandom(undefined, minLevel, 'aug');
         continue;
       }
       rarity = 'rare';
@@ -744,13 +808,14 @@ function runAttempt(
         spend(id);
         const side = plan.targets[left[0] ?? -1]?.kind;
         if (side && strategy.sideOmen) spend(SIDE_OMEN.regal[side]);
-        addRandom(strategy.sideOmen ? side : undefined, minLevel);
+        addRandom(strategy.sideOmen ? side : undefined, minLevel, 'regal');
       }
       continue;
     }
 
     if (strategy.fracture && slots.length >= 4 && !slots.some((slot) => slot.locked)) {
       spend('fracturing-orb');
+      note('fracture', slots.filter((slot) => slot.target >= 0).length / slots.length);
       const picked = slots[Math.floor(random() * slots.length)];
       if (picked) picked.locked = true;
       continue;
@@ -759,6 +824,7 @@ function runAttempt(
     // Divine перебрасывает значения всех модов, поэтому только когда все цели в нужном тире.
     if (strategy.divine && left.every((index) => slots.some((slot) => slot.aim === index))) {
       spend('divine');
+      note('divine', slots.reduce((all, slot) => (slot.aim >= 0 ? all * slot.chance : all), 1));
       for (const slot of slots) {
         if (slot.aim >= 0) slot.target = random() < slot.chance ? slot.aim : -1;
       }
@@ -808,8 +874,9 @@ function runAttempt(
       if (strategy.whittling) spend('omen-of-whittling');
       const chaos = orb('chaos');
       spend(strategy.remove === 'chaos' ? chaos.id : 'annul');
-      if (!removeRandom(side, strategy.whittling)) return false;
-      if (strategy.remove === 'chaos') addRandom(undefined, chaos.minLevel);
+      const annulStage = strategy.remove === 'annul' ? 'annul' : undefined;
+      if (!removeRandom(side, strategy.whittling, annulStage)) return false;
+      if (strategy.remove === 'chaos') addRandom(undefined, chaos.minLevel, 'chaos');
       continue;
     }
 
@@ -819,13 +886,14 @@ function runAttempt(
     spend(exalt.id);
     if (strategy.doubleExalt) {
       spend('omen-of-greater-exaltation');
-      addRandom(undefined, exalt.minLevel);
-      if (!addRandom(undefined, exalt.minLevel)) return false;
+      addRandom(undefined, exalt.minLevel, 'exalt');
+      if (!addRandom(undefined, exalt.minLevel, 'exalt')) return false;
       continue;
     }
     const first = plan.targets[rolled[0] ?? -1]?.kind ?? 'prefix';
     if (strategy.sideOmen) spend(SIDE_OMEN.exalt[first]);
-    if (!addRandom(strategy.sideOmen ? first : undefined, exalt.minLevel)) return false;
+    const side = strategy.sideOmen ? first : undefined;
+    if (!addRandom(side, exalt.minLevel, side ? `exalt-${side}` : 'exalt')) return false;
   }
   return false;
 }
@@ -836,16 +904,17 @@ function runStrategy(
   strategy: Strategy,
   options: PlannerOptions,
   finish: CurrencyUse[],
-  steps: PlanStep[],
+  steps: StepDraft[],
 ): StrategyResult {
   const loops = strategy.remove !== undefined || strategy.divine === true;
   const trials = options.trials ?? (loops ? LOOP_TRIALS : ONE_PASS_TRIALS);
   const random = createRandom(options.seed ?? 1);
   const uses = new Map<string, number>();
+  const odds: StageOdds = new Map();
 
   let successes = 0;
   for (let trial = 0; trial < trials; trial += 1) {
-    if (runAttempt(plan, start, strategy, random, uses)) successes += 1;
+    if (runAttempt(plan, start, strategy, random, uses, odds)) successes += 1;
   }
 
   const labels = { ...CURRENCY_LABELS, ...options.labels };
@@ -874,7 +943,11 @@ function runStrategy(
     basePriceMissing: options.basePrice === undefined && probability < 1,
     incompleteCost: [...list, ...finish].some((use) => use.price === null),
     uses: [...list, ...finish],
-    steps,
+    steps: steps.map(({ stage, ...step }) => {
+      const seen = stage ? odds.get(stage) : undefined;
+      if (!stage || !seen) return step;
+      return { ...step, chance: seen.sum / seen.casts, chanceOf: CHANCE_OF[stage] ?? 'нужный мод' };
+    }),
   };
 }
 
@@ -964,11 +1037,11 @@ function buildSteps(
   plan: Plan,
   finish: CurrencyUse[],
   labels: Record<string, string>,
-): PlanStep[] {
-  const steps: PlanStep[] = [];
+): StepDraft[] {
+  const steps: StepDraft[] = [];
   const name = (id: string): string => useLabel(id, labels);
   const tier = strategy.tier ?? 'base';
-  const needed = mods.filter((mod) => mod.status === 'need');
+  const needed = mods.filter((mod) => mod.status === 'need' && !mod.socket);
   const goal = (kind?: Side): string =>
     needed
       .filter((mod) => !kind || mod.kind === kind)
@@ -977,20 +1050,20 @@ function buildSteps(
 
   if (start.rarity === 'normal') {
     if (strategy.alchemy) {
-      steps.push({ title: name('alch'), detail: 'Сделать предмет редким сразу с 4 модами.' });
+      steps.push({ title: name('alch'), detail: 'Сделать предмет редким сразу с 4 модами.', stage: 'alch' });
     } else {
-      steps.push({ title: name(ORB_IDS.transmute[tier]), detail: 'Сделать предмет волшебным.' });
+      steps.push({ title: name(ORB_IDS.transmute[tier]), detail: 'Сделать предмет волшебным.', stage: 'transmute' });
     }
   }
   if (start.rarity !== 'rare' && !strategy.alchemy) {
-    steps.push({ title: name(ORB_IDS.aug[tier]), detail: 'Добавить второй мод, если есть место.' });
+    steps.push({ title: name(ORB_IDS.aug[tier]), detail: 'Добавить второй мод, если есть место.', stage: 'aug' });
     const essence = strategy.essence
       ? [...plan.essences.values()].find((option) => !option.essence.perfect)
       : undefined;
     steps.push(
       essence
-        ? { title: essence.essence.name, detail: 'Сделать предмет редким с гарантированным модом.' }
-        : { title: name(ORB_IDS.regal[tier]), detail: 'Сделать предмет редким.' },
+        ? { title: essence.essence.name, detail: 'Сделать предмет редким с гарантированным модом.', stage: 'essence' }
+        : { title: name(ORB_IDS.regal[tier]), detail: 'Сделать предмет редким.', stage: 'regal' },
     );
   }
 
@@ -1000,6 +1073,7 @@ function buildSteps(
         steps.push({
           title: `${essence.name} + ${name(SIDE_OMEN.essence[essence.kind])}`,
           detail: `Заменяет случайный мод на: ${essence.text}`,
+          stage: 'essence',
         });
       }
     }
@@ -1008,6 +1082,7 @@ function buildSteps(
     steps.push({
       title: name('fracturing-orb'),
       detail: 'На предмете с 4 модами: закрепляет случайный мод. Лучше применять, когда хорошие моды в большинстве.',
+      stage: 'fracture',
     });
   }
 
@@ -1020,6 +1095,7 @@ function buildSteps(
       title: `${exalt}${omen}`,
       detail: `Цель: ${wanted}`,
       repeat: true,
+      stage: strategy.sideOmen ? `exalt-${side}` : 'exalt',
     });
   }
 
@@ -1034,6 +1110,7 @@ function buildSteps(
         ? 'Если на стороне нет места или выпал мусор: убрать мод с оменом стороны и вернуться к предыдущему шагу. Омен выбирает сторону, но мод на ней случайный, может уйти и нужный.'
         : 'Если нужной стороне не хватает места: мод снимается случайно с любой стороны, может уйти и нужный. Затем вернуться к предыдущему шагу.',
       repeat: true,
+      stage: strategy.remove,
     });
   }
 
@@ -1048,6 +1125,7 @@ function buildSteps(
       title: `${name(plan.bone)}: очернение`,
       detail: `Активировать: ${omens}. В Колодце душ выбрать: ${entry.text}`,
       repeat: true,
+      stage: 'desecrate',
     });
   }
 
@@ -1056,6 +1134,7 @@ function buildSteps(
       title: name('divine'),
       detail: 'Когда все нужные моды в правильном тире: перебрасывать значения до разброса.',
       repeat: true,
+      stage: 'divine',
     });
   }
 
@@ -1103,6 +1182,154 @@ function blocker(
     return { status: 'impossible', note: `нужен уровень предмета ${Math.min(...levels)}` };
   }
   return null;
+}
+
+/** Шанс цели с одной сферы и оменом стороны, по всем модам этой стороны. */
+function omenShare(plan: Plan, index: number): number {
+  const kind = plan.targets[index]?.kind;
+  const side = plan.rows.filter((row) => row.mod.kind === kind);
+  const total = side.reduce((sum, row) => sum + row.mod.weight, 0);
+  const hit = side
+    .filter((row) => row.target === index)
+    .reduce((sum, row) => sum + row.mod.weight * row.chance, 0);
+  return total > 0 ? hit / total : 0;
+}
+
+/** Предмет с готовыми модами. shortcut: лишних модов на нём нет, рынок редко даёт такие редкие. */
+function boughtStart(mods: number[], targets: TargetMod[], pool: ModPool): Start {
+  const slots = mods.flatMap((index): Slot[] => {
+    const entry = targets[index];
+    if (!entry) return [];
+    const row = poolRows(entry, pool).find(
+      (mod) => matchesTarget(mod, entry) && rollChance(mod, entry.minimums) > 0,
+    );
+    return [
+      {
+        kind: entry.kind,
+        family: entry.family,
+        target: index,
+        aim: index,
+        chance: 1,
+        level: row?.level ?? 1,
+        locked: false,
+        desecrated: false,
+      },
+    ];
+  });
+  const prefixes = slots.filter((slot) => slot.kind === 'prefix').length;
+  const suffixes = slots.length - prefixes;
+  if (slots.length === 0) return { rarity: 'normal', slots };
+  return { rarity: prefixes <= 1 && suffixes <= 1 ? 'magic' : 'rare', slots };
+}
+
+function wantedText(entry: TargetMod): string {
+  const minimum = entry.minimums.map((value) => Math.ceil(value)).join(' / ');
+  return `${entry.text} (от ${minimum})`;
+}
+
+/**
+ * Какую базу купить под образец. Цены готовых предметов неизвестны, поэтому
+ * показывается предел: дороже него покупка хуже крафта с белой базы.
+ */
+export function suggestBases(target: ParsedItem, options: PlannerOptions): BaseAdvice {
+  const { pool } = options;
+  const itemLevel = target.itemLevel ?? 100;
+  const targets = readTargetMods(target, pool, options.tolerance);
+  for (const entry of targets) capMinimums(entry, poolRows(entry, pool));
+
+  const canDesecrate = boneFor(target) !== null;
+  const reserved: Plan['reserved'] = { prefix: 0, suffix: 0 };
+  const active: number[] = [];
+  const mustHave: string[] = [];
+  let desecrationTaken = false;
+  targets.forEach((entry, index) => {
+    const blocked = blocker(entry, pool, itemLevel, desecrationTaken, canDesecrate);
+    if (blocked) {
+      mustHave.push(wantedText(entry));
+      if (blocked.status === 'special') reserved[entry.kind] += 1;
+      return;
+    }
+    if (entry.source === 'desecrated') desecrationTaken = true;
+    active.push(index);
+  });
+
+  const levelFor = (entry: TargetMod): number =>
+    Math.min(
+      ...poolRows(entry, pool)
+        .filter((mod) => matchesTarget(mod, entry) && rollChance(mod, entry.minimums) > 0)
+        .map((mod) => mod.level),
+    );
+  const requiredLevel = Math.max(
+    1,
+    ...active.map((index) => levelFor(targets[index] as TargetMod)).filter(Number.isFinite),
+  );
+
+  const bossOmens = target.category === 'weapon' || target.category === 'jewellery';
+  const plan = buildPlan(targets, active, reserved, pool, itemLevel, boneFor(target) ?? '', bossOmens);
+  const run = (start: Start): StrategyResult[] =>
+    strategiesFor(start, plan, active.length - start.slots.length)
+      .map((strategy) => runStrategy(plan, start, strategy, options, [], []))
+      .filter((result) => result.probability > 0);
+
+  const whiteRuns = run(boughtStart([], targets, pool));
+  const total = (result: StrategyResult): number =>
+    (result.costPerAttempt + (options.basePrice ?? 0)) / result.probability;
+  const white = whiteRuns.reduce<StrategyResult | undefined>(
+    (best, result) => (!best || total(result) < total(best) ? result : best),
+    undefined,
+  );
+  const whiteTotal = white ? total(white) : null;
+
+  // Покупать есть смысл то, что сложнее всего выкрафтить.
+  const hardest = active
+    .filter((index) => ['normal', 'borrowed'].includes(targets[index]?.source ?? ''))
+    .sort((a, b) => omenShare(plan, a) - omenShare(plan, b));
+  const firstOn = (side: Side): number[] =>
+    hardest.filter((index) => targets[index]?.kind === side).slice(0, 1);
+  const sets = [firstOn('prefix'), firstOn('suffix'), [...firstOn('prefix'), ...firstOn('suffix')], hardest.slice(0, 3)]
+    .filter((set) => set.length > 0 && set.length < active.length);
+  const unique = [...new Map(sets.map((set) => [[...set].sort().join(','), set])).values()];
+
+  const baseOptions = unique.flatMap((set): BaseOption[] => {
+    const start = boughtStart(set, targets, pool);
+    const limit = (result: StrategyResult): number =>
+      whiteTotal === null
+        ? -result.costPerAttempt / result.probability
+        : result.probability * whiteTotal - result.costPerAttempt;
+    const best = run(start).reduce<StrategyResult | undefined>(
+      (top, result) => (!top || limit(result) > limit(top) ? result : top),
+      undefined,
+    );
+    if (!best || start.rarity === 'normal') return [];
+    const maxPrice = whiteTotal === null || best.incompleteCost ? null : limit(best);
+    if (maxPrice !== null && maxPrice <= 0) return [];
+    return [
+      {
+        mods: set.map((index) => wantedText(targets[index] as TargetMod)),
+        rarity: start.rarity,
+        label: best.label,
+        probability: best.probability,
+        cost: best.costPerAttempt / best.probability,
+        maxPrice,
+        incompleteCost: best.incompleteCost,
+      },
+    ];
+  });
+
+  return {
+    baseType: target.baseType ?? '',
+    itemLevel: requiredLevel,
+    mustHave,
+    white: white
+      ? {
+          label: white.label,
+          probability: white.probability,
+          cost: white.costPerAttempt / white.probability,
+          incompleteCost: white.incompleteCost,
+        }
+      : null,
+    options: baseOptions.sort((a, b) => (b.maxPrice ?? 0) - (a.maxPrice ?? 0) || a.cost - b.cost),
+  };
 }
 
 export function analyzeTarget(
@@ -1240,13 +1467,9 @@ export function analyzeTarget(
   // Шанс одной сферы виден, даже если целиком предмет симуляция не собрала.
   report.mods.forEach((mod, index) => {
     if (mod.socket || mod.status !== 'need' || !active.includes(index)) return;
-    const side = plan.rows.filter((row) => row.mod.kind === mod.kind);
-    const total = side.reduce((sum, row) => sum + row.mod.weight, 0);
-    const hit = side
-      .filter((row) => row.target === index)
-      .reduce((sum, row) => sum + row.mod.weight * row.chance, 0);
-    if (total > 0 && hit > 0) {
-      const percent = `с оменом стороны ${((hit / total) * 100).toFixed(2)}%`;
+    const share = omenShare(plan, index);
+    if (share > 0) {
+      const percent = `с оменом стороны ${(share * 100).toFixed(2)}%`;
       mod.note = mod.note ? `${percent}, ${mod.note}` : percent;
     }
   });

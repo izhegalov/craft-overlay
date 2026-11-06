@@ -215,8 +215,8 @@ export function boneFor(item: ParsedItem): string | null {
   return item.category === 'armour' || item.category === 'offhand' ? 'preserved-rib' : null;
 }
 
-/** База совпадает: у волшебного предмета она спрятана внутри имени. */
+/** База совпадает: у белого с качеством есть приставка, у волшебного она спрятана внутри имени. */
 export function sameBase(item: ParsedItem, baseType: string): boolean {
-  if (item.baseType) return item.baseType === baseType;
+  if (item.baseType) return item.baseType.replace(/^Образцов\S*\s+/, '') === baseType;
   return item.name?.includes(baseType) ?? false;
 }
