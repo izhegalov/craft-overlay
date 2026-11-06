@@ -8,7 +8,19 @@ export interface ModsData {
       key: string;
       title?: string;
       groups: Array<{
-        rows: Array<{ n: string; lvl: number; g: string; w: number; d: string; f: string }>;
+        rows: Array<{
+          n: string;
+          lvl: number;
+          g: string;
+          w: number;
+          /** Первая строка мода. */
+          d: string;
+          f: string;
+          /** Остальные строки гибрида. */
+          x?: string[];
+          /** Теги мода. */
+          t?: string[];
+        }>;
       }>;
     }>;
   }>;
@@ -24,6 +36,9 @@ export interface PoolMod {
   text: string;
   family: string;
   template: string;
+  /** Шаблоны остальных строк гибрида. */
+  extraTemplates: string[];
+  /** Диапазоны всех строк по порядку. */
   ranges: Array<[number, number]>;
   /** Вес неизвестен и взят из такого же мода другого класса. */
   estimated?: boolean;
@@ -150,7 +165,8 @@ function toPoolMod(row: Row): PoolMod {
     text: row.d,
     family: row.f,
     template: statTemplate(row.d),
-    ranges: rowRanges(row.d),
+    extraTemplates: (row.x ?? []).map(statTemplate),
+    ranges: [row.d, ...(row.x ?? [])].flatMap(rowRanges),
   };
 }
 

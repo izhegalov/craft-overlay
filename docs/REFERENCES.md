@@ -14,7 +14,7 @@
 | `data/reference/ru-names.json` | 19 КБ | 300 пар `EN → RU`: уникальные предметы, руны, эссенции, валюты | перевод имён уникальных предметов |
 | `data/reference/trade-items.json` | 182 КБ | Снимок `/api/trade2/data/items`: `result[]` — категории (`accessory`, …) с `entries[].type` | построение trade-запросов |
 | `data/reference/trade-stats.json` | 834 КБ | Снимок `/api/trade2/data/stats`: `result[]` — группы статов, `entries[].id/text/type` | фильтры по модам в trade |
-| `data/reference/mods-data.json` | 2.1 МБ | Моды по классам: `classes[].sections[].groups[].rows[]` с тиром/весом/описанием (RU) | крафт-калькулятор, проверка модов, веса |
+| `data/reference/mods-data.json` | 2.4 МБ | Моды по классам: `classes[].sections[].groups[].rows[]` с тиром/весом/описанием (RU) | крафт-калькулятор, проверка модов, веса |
 | `data/reference/waystone-mods-ru.txt` | 5.7 КБ | 35 обычных + 17 очернённых модов путевых камней (RU), шаблоны `(min—max)` | проверка парсера waystone, regex-поиск |
 | `data/reference/amulet-example.txt` | 186 Б | Маленький пример мода амулета | быстрый тест |
 

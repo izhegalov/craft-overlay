@@ -356,8 +356,8 @@ function stem(name: string): string {
 
 /**
  * Находит мод в списке: по имени, затем по тексту и значению.
- * shortcut: у гибридов в mods-data.json есть только первая строка, вторая
- * не сверяется; нужен полный источник модов.
+ * Сначала ищет среди модов с тем же набором строк: гибрид и чистый мод
+ * могут начинаться одинаково.
  */
 function findRow<T extends PoolMod>(
   list: T[],
@@ -366,20 +366,35 @@ function findRow<T extends PoolMod>(
   values: number[],
 ): T | undefined {
   const templates = lines.map(statTemplate);
-  const candidates = list.filter(
+  const matching = list.filter(
     (mod) => mod.kind === group.kind && templates.includes(mod.template),
   );
+  const exact = matching.filter(
+    (mod) =>
+      mod.extraTemplates.length === templates.length - 1 &&
+      mod.extraTemplates.every((template) => templates.includes(template)),
+  );
+  const candidates = exact.length > 0 ? exact : matching;
   const affix = group.affixName;
   return (
     (affix ? candidates.find((mod) => stem(mod.name) === stem(affix)) : undefined) ??
     candidates.find((mod) =>
-      mod.ranges.every(([low, high], index) => {
+      mod.ranges.slice(0, values.length).every(([low, high], index) => {
         const value = values[index] ?? 0;
         return value >= low && value <= high;
       }),
     ) ??
     candidates[0]
   );
+}
+
+/** Числа мода в порядке его строк, как в ranges. */
+function rowValues(group: ModifierGroup, row: PoolMod | undefined, line: string): number[] {
+  const texts = group.lines.map((entry) => entry.text);
+  const extra = (row?.extraTemplates ?? []).flatMap(
+    (template) => texts.find((text) => statTemplate(text) === template) ?? [],
+  );
+  return [line, ...extra].flatMap(statValues);
 }
 
 function identify(group: ModifierGroup, pool: ModPool): Identified {
@@ -411,8 +426,8 @@ function identify(group: ModifierGroup, pool: ModPool): Identified {
 
 /** Цели образца. Текст без advanced-заголовков (market) ищем по шаблонам пула. */
 export function readTargetMods(target: ParsedItem, pool: ModPool, tolerance: number): TargetMod[] {
-  const minimums = (line: string, quality: number): number[] =>
-    statValues(line).map((value) => (value / quality) * (1 - tolerance));
+  const minimums = (values: number[], quality: number): number[] =>
+    values.map((value) => (value / quality) * (1 - tolerance));
 
   const mods: TargetMod[] = explicitGroups(target).map((group) => {
     const { row, source, line } = identify(group, pool);
@@ -422,7 +437,7 @@ export function readTargetMods(target: ParsedItem, pool: ModPool, tolerance: num
       template: statTemplate(line),
       family: row?.family ?? null,
       kind: group.kind as Side,
-      minimums: minimums(line, quality),
+      minimums: minimums(rowValues(group, row, line), quality),
       source,
       quality,
       ...(row && 'method' in row ? { method: row.method } : {}),
@@ -446,7 +461,7 @@ export function readTargetMods(target: ParsedItem, pool: ModPool, tolerance: num
         template,
         family: row.family,
         kind: row.kind,
-        minimums: minimums(line, 1),
+        minimums: minimums(statValues(line), 1),
         source,
         quality: 1,
         ...('method' in row ? { method: (row as SpecialMod).method } : {}),
@@ -459,7 +474,8 @@ export function readTargetMods(target: ParsedItem, pool: ModPool, tolerance: num
 
 /** Шанс, что равномерный ролл мода не ниже порогов цели. */
 function rollChance(mod: Pick<PoolMod, 'ranges'>, minimums: number[]): number {
-  if (mod.ranges.length !== minimums.length) return 0;
+  // Строка с маркета может быть одной строкой гибрида: тогда порогов меньше.
+  if (mod.ranges.length < minimums.length) return 0;
   return mod.ranges.reduce((chance, [low, high], index) => {
     const minimum = minimums[index] ?? 0;
     if (minimum <= low) return chance;
@@ -572,9 +588,9 @@ function meetsTarget(group: ModifierGroup, target: TargetMod, pool: ModPool): bo
     (!row || !target.family || row.family === target.family);
   if (!sameMod) return false;
   const quality = qualityOf(group);
-  const values = statValues(line).map((value) => value / quality);
+  const values = rowValues(group, row, line).map((value) => value / quality);
   return (
-    values.length === target.minimums.length &&
+    values.length >= target.minimums.length &&
     target.minimums.every((minimum, index) => (values[index] ?? 0) >= minimum)
   );
 }

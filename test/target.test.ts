@@ -443,3 +443,30 @@ describe('неизвестные веса', () => {
     expect(report.mods[0]?.note).toContain('вес оценён');
   });
 });
+
+describe('гибриды', () => {
+  const armourPool = buildPool(data, 'Body_Armours_dex', ruToEn) as ModPool;
+  const plate = (rarity: string, evasion: number, life: number): ParsedItem =>
+    parse(`Класс предмета: Нательные доспехи
+Редкость: ${rarity}
+Имя
+Дублёный плащ
+--------
+Уровень предмета: 80
+--------
+{ Префикс "Блошиный" (Уровень: 8) }
+${evasion}(6-13)% увеличение уклонения
++${life}(7-10) к максимуму здоровья`);
+
+  it('в данных есть обе строки гибрида и их диапазоны', () => {
+    const row = armourPool.mods.find((mod) => mod.name === 'Блошиный');
+    expect(row?.extraTemplates).toEqual([statTemplate('+(7—10) к максимуму здоровья')]);
+    expect(row?.ranges).toEqual([[6, 13], [7, 10]]);
+  });
+
+  it('вторая строка гибрида проходит проверку значения', () => {
+    const options = { pool: armourPool, tolerance: 0, prices: {}, trials: 10 };
+    expect(analyzeTarget(plate('Редкий', 12, 10), plate('Редкий', 12, 10), options).mods[0]?.status).toBe('have');
+    expect(analyzeTarget(plate('Редкий', 12, 7), plate('Редкий', 12, 10), options).mods[0]?.status).toBe('need');
+  });
+});
